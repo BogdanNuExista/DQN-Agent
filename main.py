@@ -9,7 +9,7 @@ from prioritized_replay_buffer import PrioritizedReplayBuffer
 from utils import preprocess, stack_frames, evaluate_agent
 
 # Environment setup
-env = gym.make("ALE/Pong-v5", render_mode="rgb_array", frameskip=4)
+env = gym.make("ALE/Breakout-v5", render_mode="rgb_array", frameskip=4, full_action_space=False)  # Use game-specific actions only
 num_actions = env.action_space.n
 state_shape = (84, 84, 4)
 
