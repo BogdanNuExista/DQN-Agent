@@ -1,32 +1,39 @@
+# main.py
 import gym
 import numpy as np
 import tensorflow as tf
 import os
+import time
 from dqn_agent import DQNAgent
 from prioritized_replay_buffer import PrioritizedReplayBuffer
-from utils import preprocess, stack_frames, plot_rewards
+from utils import preprocess, stack_frames, evaluate_agent
 
-env = gym.make("ALE/Pong-v5", render_mode="rgb_array") #frame_skip=4
+# Environment setup
+env = gym.make("ALE/Pong-v5", render_mode="rgb_array", frameskip=4)
 num_actions = env.action_space.n
 state_shape = (84, 84, 4)
 
+# Agent and buffer
 agent = DQNAgent(state_shape, num_actions)
-buffer = PrioritizedReplayBuffer(100_000)
+buffer = PrioritizedReplayBuffer(300_000)  # Optimized buffer size
 
+# Training parameters
 epsilon = 1.0
-min_epsilon = 0.1
+min_epsilon = 0.01
 epsilon_decay = 0.995
-batch_size = 32
-episodes = 500
-update_target_freq = 5
-save_model_freq = 10
+batch_size = 64
+episodes = 1000
+save_model_freq = 50
 beta_start = 0.4
 beta_increment = 1e-3
 beta = beta_start
 
+# Tracking
 rewards = []
 os.makedirs("saved_models", exist_ok=True)
+start_time = time.time()
 
+# Training loop
 for ep in range(episodes):
     obs, _ = env.reset()
     frame = preprocess(obs)
@@ -34,43 +41,61 @@ for ep in range(episodes):
     state = np.stack(stacked_frames, axis=2)
     total_reward = 0
     done = False
+    step_count = 0
 
     while not done:
         action = agent.act(state, epsilon)
 
-        total_frame_reward = 0
-        for _ in range(4):  # Frame skipping
-            next_obs, reward, terminated, truncated, _ = env.step(action)
-            total_frame_reward += reward
-            if terminated or truncated:
-                break
-
+        # Environment step with built-in frame skipping
+        next_obs, reward, terminated, truncated, _ = env.step(action)
+        done = terminated or truncated
+        
         next_frame = preprocess(next_obs)
         next_state, stacked_frames = stack_frames(stacked_frames, next_frame, False)
-        buffer.add(state, action, total_frame_reward, next_state, terminated or truncated)
+        
+        # Store transition
+        buffer.add(state, action, reward, next_state, done)
         state = next_state
-        total_reward += total_frame_reward
-        done = terminated or truncated
+        total_reward += reward
+        step_count += 1
 
+        # Train from buffer
         if len(buffer) > batch_size:
-            states, actions, rewards_, next_states, dones, indices, weights = buffer.sample(batch_size, beta=beta)
+            states, actions, rewards_, next_states, dones, indices, weights = buffer.sample(batch_size, beta)
+            
+            # Train agent
             td_errors = agent.train(states, actions, rewards_, next_states, dones, weights)
-            buffer.update_priorities(indices, td_errors.numpy() + 1e-6)
+            
+            # Update priorities
+            buffer.update_priorities(indices, td_errors.numpy())
+            
+            # Adjust beta
             beta = min(1.0, beta + beta_increment)
 
-    if ep % update_target_freq == 0:
-        agent.update_target_network()
-
+    # Update exploration rate
+    epsilon = max(min_epsilon, epsilon * epsilon_decay)
+    rewards.append(total_reward)
+    
+    # Save model periodically
     if ep % save_model_freq == 0:
         agent.save(f"saved_models/model_episode_{ep}.keras")
+    
+    # Evaluate periodically
+    if ep % 20 == 0:
+        eval_reward = evaluate_agent(agent, env)
+        print(f"Episode {ep}/{episodes} | "
+              f"Reward: {total_reward:5.1f} | "
+              f"Eval Reward: {eval_reward:5.1f} | "
+              f"Epsilon: {epsilon:.3f} | "
+              f"Beta: {beta:.3f} | "
+              f"Time: {time.time()-start_time:.1f}s")
+        start_time = time.time()
 
-    rewards.append(total_reward)
-    #plot_rewards(rewards)
+# Final evaluation
+final_reward = evaluate_agent(agent, env)
+print(f"Training complete. Final evaluation reward: {final_reward}")
 
-    epsilon = max(min_epsilon, epsilon * epsilon_decay)
-    print(f"Episode {ep}, Total Reward: {total_reward}, Epsilon: {epsilon:.3f}")
-
-# --- Evaluation ---
+# Render final performance
 obs, _ = env.reset()
 frame = preprocess(obs)
 stacked_frames = [frame] * 4
@@ -87,5 +112,5 @@ while not done:
     total_reward += reward
     done = terminated or truncated
 
-print(f"Evaluation run finished. Total reward: {total_reward}")
+print(f"Final performance reward: {total_reward}")
 env.close()
