@@ -1,0 +1,10 @@
+# Ignore everything
+*
+
+# But not Python files
+!*.py
+!.gitignore
+!requirements.txt
+
+# Don't ignore directories so we can recurse into them
+!*/
